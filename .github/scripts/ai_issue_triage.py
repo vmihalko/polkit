@@ -517,12 +517,16 @@ def validate(
                 result.exit_code = build_proc.returncode
                 return result
 
-            # Start container in background
+            # Start container with systemd as PID 1
             start_proc = subprocess.run(
                 [
                     "docker", "run", "-d",
+                    "--privileged",
+                    "--cgroupns=host",
+                    "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
                     f"--name={container_name}",
                     f"--memory={DOCKER_MEMORY_LIMIT}",
+                    "--entrypoint", "/sbin/init",
                     tag,
                 ],
                 capture_output=True,
@@ -535,27 +539,21 @@ def validate(
                 result.exit_code = start_proc.returncode
                 return result
 
-            # Start dbus and polkitd inside the container
-            log.info("Starting dbus-daemon and polkitd in container...")
-            init_proc = subprocess.run(
-                [
-                    "docker", "exec", container_name,
-                    "bash", "-c",
-                    "mkdir -p /run/dbus && "
-                    "dbus-daemon --system --fork && "
-                    "POLKITD=$(command -v polkitd 2>/dev/null || "
-                    "  echo /usr/lib/polkit-1/polkitd) && "
-                    "$POLKITD --no-debug & "
-                    "sleep 2 && "
-                    "ls -la /run/dbus/",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            log.info("Container init rc=%d stdout=%s stderr=%s",
-                     init_proc.returncode,
-                     init_proc.stdout[:500], init_proc.stderr[:500])
+            # Wait for systemd to finish booting
+            log.info("Waiting for systemd to boot in container...")
+            for _ in range(15):
+                boot_check = subprocess.run(
+                    ["docker", "exec", container_name,
+                     "systemctl", "is-system-running"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                state = boot_check.stdout.strip()
+                log.info("systemd state: %s", state)
+                if state in ("running", "degraded"):
+                    break
+                time.sleep(2)
+            else:
+                log.warning("systemd did not reach running state")
 
             # Run the reproducer as testuser (-t for TTY, needed by pkttyagent)
             run_proc = subprocess.run(

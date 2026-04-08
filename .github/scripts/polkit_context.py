@@ -152,14 +152,14 @@ busctl/gdbus/dbus-send). Only write C code if the bug cannot be triggered via \
 CLI tools. The reproducer must be fully self-contained and exit with code 0 \
 if the bug is reproduced, or non-zero if not.
 
-The script will run inside a Docker container as a non-root user (testuser) \
-via: runuser -u testuser -- /reproducer/script.sh
-dbus-daemon and polkitd are already running when the script starts.
+The script will run inside a Docker container booted with systemd as PID 1 \
+(dbus, polkitd, and logind are all running). It runs as a non-root user \
+(testuser) via: docker exec -t <container> runuser -u testuser -- /reproducer/script.sh
 
 Container constraints:
 - Do NOT use "set -u" — container environments have minimal variables set.
-- Do NOT start dbus-daemon or polkitd — they are already running.
-- Do NOT use systemctl — there is no systemd init.
+- Do NOT start dbus-daemon or polkitd — systemd starts them automatically.
+- You CAN use systemctl if needed (systemd is running).
 - polkit (pkexec, pkcheck, pkttyagent) and dbus are pre-installed.
 - Keep the script as SHORT as possible to avoid output token limits.
 
@@ -211,10 +211,10 @@ REPRODUCER SCRIPT ({script_filename}):
 Requirements:
 1. FROM {base_image}
 2. Install ALL packages the reproducer needs. Always include these base packages:
-   - Fedora/RHEL: polkit dbus-daemon util-linux (NOTE: the package is "dbus-daemon", NOT "dbus")
-   - Debian/Ubuntu: policykit-1 dbus util-linux
-   - Arch: polkit dbus util-linux
-   - Alpine: polkit dbus util-linux
+   - Fedora/RHEL: polkit dbus-daemon systemd util-linux (NOTE: the package is "dbus-daemon", NOT "dbus")
+   - Debian/Ubuntu: policykit-1 dbus systemd systemd-sysv util-linux
+   - Arch: polkit dbus systemd util-linux
+   - Alpine: polkit dbus openrc util-linux
    Then add any other tools or locale packages the script needs. Inspect the \
    script carefully — if it uses locales like fr_FR.UTF-8 or en_US.UTF-8, \
    install the corresponding locale packages (e.g. glibc-langpack-fr, \
