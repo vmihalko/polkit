@@ -551,11 +551,15 @@ def communicate(
             "An automated reproducer was generated but **could not be verified** "
             "in an isolated Docker container.\n"
         )
-        if validation_result and validation_result.stderr.strip():
+        output = "\n".join(filter(None, [
+            validation_result.stdout.strip() if validation_result else "",
+            validation_result.stderr.strip() if validation_result else "",
+        ]))
+        if validation_result and output:
             parts.append(
                 f"<details><summary>Validation error details</summary>\n\n"
                 f"**Exit code:** {validation_result.exit_code}\n\n"
-                f"```\n{validation_result.stderr.strip()}\n```\n"
+                f"```\n{output}\n```\n"
                 f"</details>\n"
             )
         parts.append(
