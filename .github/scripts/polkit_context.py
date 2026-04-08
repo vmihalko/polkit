@@ -187,27 +187,26 @@ Respond with ONLY a JSON object (no markdown fencing):
 """
 
 PROMPT_VALIDATE_DOCKERFILE = """\
-Generate a Dockerfile that:
-1. Starts FROM {base_image}
-2. Installs packages needed to build polkit from source for this distro, \
-   including git. \
-   On Fedora/RHEL/CentOS the build-requires are: meson, ninja-build, gcc, \
-   glib2-devel, gobject-introspection-devel, expat-devel, pam-devel, \
-   duktape-devel, systemd-devel, dbus-devel, gettext. \
-   On Debian/Ubuntu the equivalents are: meson, ninja-build, gcc, \
-   libglib2.0-dev, libgirepository1.0-dev, libexpat-dev, libpam0g-dev, \
-   libsystemd-dev, libdbus-1-dev, gettext, pkg-config. \
-   NOTE: duktape-dev is NOT available on Debian/Ubuntu — do NOT install it. \
-   polkit's meson build will automatically download and build duktape via \
-   its subprojects/wrap mechanism.
-3. Installs these additional packages: {extra_packages}
-4. Clones the polkit source tree: git clone {repo_url} /polkit
-5. Builds polkit: cd /polkit && meson setup builddir && ninja -C builddir
-6. COPY the reproducer script {script_filename} from the build context to \
-   /reproducer/{script_filename}
-7. Makes the reproducer executable
-8. Sets the CMD to run the reproducer
+Generate a Dockerfile that installs polkit from the distro's package manager \
+and runs a reproducer script.
+
+IMPORTANT — do NOT build polkit from source. Use the distro's packaged version \
+so the environment matches what the reporter is using.
+
+Steps:
+1. FROM {base_image}
+2. Single RUN command that does ALL of the following:
+   a. Install polkit and dbus using the distro's package manager:
+      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon {extra_packages} && dnf clean all
+      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus {extra_packages} && rm -rf /var/lib/apt/lists/*
+      - Arch: pacman -Sy --noconfirm polkit dbus {extra_packages}
+      - Alpine: apk add --no-cache polkit dbus {extra_packages}
+      Pick the correct package manager for the base image.
+   b. mkdir -p /run/dbus
+3. COPY {script_filename} /reproducer/{script_filename}
+4. RUN chmod +x /reproducer/{script_filename}
+5. CMD ["bash", "-c", "dbus-daemon --system --fork && /reproducer/{script_filename}"]
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
-no JSON wrapping). Use a single RUN command where possible to minimize layers.
+no JSON wrapping).
 """
