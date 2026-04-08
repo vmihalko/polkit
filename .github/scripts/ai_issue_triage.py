@@ -47,7 +47,7 @@ _TRIAGE_MARKER_BOT = "github-actions[bot]"
 # ---------------------------------------------------------------------------
 
 
-_FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)```\s*$", re.DOTALL)
+_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 def _stripc_fences(text: str) -> str:
     m = _FENCE_RE.search(text.strip())
@@ -231,6 +231,12 @@ _BAD_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
 def _parse_json_response(text: str) -> dict:
     """Extract a JSON object from Gemini's response, tolerating markdown fences."""
     text = _stripc_fences(text)
+    # Fallback: if text doesn't look like JSON, extract the first JSON object
+    if text and not text.startswith(('{', '[')):
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            text = text[start:end + 1]
     # Gemini sometimes emits invalid JSON escapes (e.g. \s, \d) inside strings.
     # Replace them with double-backslashes so json.loads() can parse them.
     text = _BAD_ESCAPE_RE.sub(r'\\\\', text)
