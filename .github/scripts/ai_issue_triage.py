@@ -224,9 +224,14 @@ class GitHubClient:
 # JSON parsing helpers
 # ---------------------------------------------------------------------------
 
+_BAD_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+
 def _parse_json_response(text: str) -> dict:
     """Extract a JSON object from Gemini's response, tolerating markdown fences."""
     text = _stripc_fences(text)
+    # Gemini sometimes emits invalid JSON escapes (e.g. \s, \d) inside strings.
+    # Replace them with double-backslashes so json.loads() can parse them.
+    text = _BAD_ESCAPE_RE.sub(r'\\\\', text)
     return json.loads(text)
 
 
