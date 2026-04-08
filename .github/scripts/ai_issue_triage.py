@@ -143,7 +143,9 @@ class GeminiClient:
                     continue
                 resp.raise_for_status()
                 data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                log.debug("Gemini response (%d chars):\n%s", len(text), text)
+                return text
             except Exception as exc:
                 last_err = exc
                 if attempt < 2:
@@ -669,6 +671,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Gemini model name (default: gemini-2.5-flash)",
     )
 
+    parser.add_argument(
+        "--debug", action="store_true", default=False,
+        help="Enable debug logging (shows raw Gemini responses)",
+    )
+
     for feat in ("assess", "label", "elicit", "design", "communicate", "validate"):
         parser.add_argument(
             f"--{feat}", action=argparse.BooleanOptionalAction, default=True,
@@ -679,6 +686,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_pipeline(args: argparse.Namespace) -> None:
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
     gemini = GeminiClient(api_key=GEMINI_API_KEY, model=args.model)
     github = GitHubClient(token=GITHUB_TOKEN, repo=args.repo)
     ret_val = 0
