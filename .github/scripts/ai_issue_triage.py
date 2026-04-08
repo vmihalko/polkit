@@ -108,7 +108,7 @@ class ValidationResult:
 class GeminiClient:
     """Thin wrapper around the Gemini REST API with retry logic."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-pro"):
         self.api_key = api_key
         self.model = model
         self._session = requests.Session()
@@ -667,8 +667,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--issue-number", type=int, required=True, help="GitHub issue number")
     parser.add_argument("--repo", required=True, help="owner/repo (e.g. polkit-org/polkit)")
     parser.add_argument(
-        "--model", default="gemini-2.5-flash",
-        help="Gemini model name (default: gemini-2.5-flash)",
+        "--model", default="gemini-2.5-pro",
+        help="Gemini model name (default: gemini-2.5-pro)",
     )
 
     parser.add_argument(
