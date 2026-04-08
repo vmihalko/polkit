@@ -210,8 +210,12 @@ REPRODUCER SCRIPT ({script_filename}):
 
 Requirements:
 1. FROM {base_image}
-2. Install ALL packages the reproducer needs: polkit, dbus, util-linux, and \
-   any other tools or locale packages referenced in the script. Inspect the \
+2. Install ALL packages the reproducer needs. Always include these base packages:
+   - Fedora/RHEL: polkit dbus-daemon util-linux (NOTE: the package is "dbus-daemon", NOT "dbus")
+   - Debian/Ubuntu: policykit-1 dbus util-linux
+   - Arch: polkit dbus util-linux
+   - Alpine: polkit dbus util-linux
+   Then add any other tools or locale packages the script needs. Inspect the \
    script carefully — if it uses locales like fr_FR.UTF-8 or en_US.UTF-8, \
    install the corresponding locale packages (e.g. glibc-langpack-fr, \
    glibc-langpack-en on Fedora; locales + locale-gen on Debian/Ubuntu).
