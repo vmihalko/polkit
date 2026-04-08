@@ -226,7 +226,34 @@ class GitHubClient:
 # JSON parsing helpers
 # ---------------------------------------------------------------------------
 
-_BAD_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+def _fix_json_escapes(text: str) -> str:
+    """Fix invalid JSON escape sequences without breaking already-valid ones.
+
+    Walks the string character-by-character so that already-escaped
+    backslashes (``\\\\``) are consumed as pairs and left intact, while
+    truly invalid escapes like ``\\$`` or ``\\x`` get an extra backslash.
+    """
+    _VALID_AFTER_BS = set('"\\/bfnrtu')
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt in _VALID_AFTER_BS:
+                out.append(text[i:i + 2])
+                i += 2
+                if nxt == 'u' and i + 4 <= len(text):
+                    out.append(text[i:i + 4])
+                    i += 4
+            else:
+                # Invalid escape — double the backslash, leave next char
+                out.append('\\\\')
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return ''.join(out)
 
 def _parse_json_response(text: str) -> dict:
     """Extract a JSON object from Gemini's response, tolerating markdown fences."""
@@ -237,9 +264,8 @@ def _parse_json_response(text: str) -> dict:
         end = text.rfind('}')
         if start != -1 and end != -1:
             text = text[start:end + 1]
-    # Gemini sometimes emits invalid JSON escapes (e.g. \s, \d) inside strings.
-    # Replace them with double-backslashes so json.loads() can parse them.
-    text = _BAD_ESCAPE_RE.sub(r'\\\\', text)
+    # Gemini sometimes emits invalid JSON escapes (e.g. \$, \x03) inside strings.
+    text = _fix_json_escapes(text)
     return json.loads(text)
 
 
