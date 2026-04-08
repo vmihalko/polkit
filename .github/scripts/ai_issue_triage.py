@@ -41,7 +41,8 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 _TRIAGE_MARKER = "Issue triaged by AI assistant"
 _TRIAGE_MARKER_BOT = "github-actions[bot]"
 
-_REPO_URL = "https://github.com/polkit-org/polkit.git"
+def _repo_url(repo: str) -> str:
+    return f"https://github.com/{repo}.git"
 
 # ---------------------------------------------------------------------------
 # Helper functions
