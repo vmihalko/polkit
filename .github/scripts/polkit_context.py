@@ -208,7 +208,7 @@ Steps:
       reproducer MUST run as a regular user)
 3. COPY {script_filename} /reproducer/{script_filename}
 4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["bash", "-c", "dbus-daemon --system --fork && su -l testuser -c /reproducer/{script_filename}"]
+5. CMD ["bash", "-c", "dbus-daemon --system --fork && runuser -u testuser -- /reproducer/{script_filename}"]
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
 no JSON wrapping).
