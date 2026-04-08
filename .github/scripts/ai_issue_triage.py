@@ -517,11 +517,10 @@ def validate(
                 result.exit_code = build_proc.returncode
                 return result
 
-            # Start container with systemd as PID 1
+            # Start container in background
             start_proc = subprocess.run(
                 [
                     "docker", "run", "-d",
-                    "--privileged",
                     f"--name={container_name}",
                     f"--memory={DOCKER_MEMORY_LIMIT}",
                     tag,
@@ -536,18 +535,23 @@ def validate(
                 result.exit_code = start_proc.returncode
                 return result
 
-            # Wait for systemd to boot (up to 30s)
-            log.info("Waiting for systemd to boot in container...")
-            subprocess.run(
+            # Start dbus and polkitd inside the container
+            log.info("Starting dbus-daemon and polkitd in container...")
+            init_proc = subprocess.run(
                 [
                     "docker", "exec", container_name,
-                    "systemctl", "is-system-running", "--wait",
+                    "bash", "-c",
+                    "dbus-daemon --system --fork && "
+                    "(/usr/lib/polkit-1/polkitd &) && "
+                    "sleep 1",
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
             )
-            # is-system-running may return "degraded" which is fine for our purposes
+            if init_proc.returncode != 0:
+                log.warning("Container init returned %d: %s",
+                            init_proc.returncode, init_proc.stderr[:500])
 
             # Run the reproducer as testuser
             run_proc = subprocess.run(

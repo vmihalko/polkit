@@ -152,13 +152,14 @@ busctl/gdbus/dbus-send). Only write C code if the bug cannot be triggered via \
 CLI tools. The reproducer must be fully self-contained and exit with code 0 \
 if the bug is reproduced, or non-zero if not.
 
-The script will run inside a Docker container with systemd as PID 1 \
-(full boot: dbus, polkitd, logind are all running). It runs as a \
-non-root user (testuser) via: runuser -u testuser -- /reproducer/script.sh
+The script will run inside a Docker container as a non-root user (testuser) \
+via: runuser -u testuser -- /reproducer/script.sh
+dbus-daemon and polkitd are already running when the script starts.
 
 Container constraints:
 - Do NOT use "set -u" — container environments have minimal variables set.
-- Do NOT start dbus-daemon or polkitd — systemd starts them automatically.
+- Do NOT start dbus-daemon or polkitd — they are already running.
+- Do NOT use systemctl — there is no systemd init.
 - polkit (pkexec, pkcheck, pkttyagent) and dbus are pre-installed.
 - Keep the script as SHORT as possible to avoid output token limits.
 
@@ -197,8 +198,7 @@ Respond with ONLY a JSON object (no markdown fencing):
 """
 
 PROMPT_VALIDATE_DOCKERFILE = """\
-Generate a Dockerfile that installs polkit from the distro's package manager \
-and boots with systemd as PID 1, so polkit has proper session tracking.
+Generate a Dockerfile that installs polkit from the distro's package manager.
 
 IMPORTANT — do NOT build polkit from source. Use the distro's packaged version \
 so the environment matches what the reporter is using.
@@ -206,22 +206,20 @@ so the environment matches what the reporter is using.
 Steps:
 1. FROM {base_image}
 2. Single RUN command that does ALL of the following:
-   a. Install polkit, dbus, and systemd using the distro's package manager:
-      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon systemd util-linux {extra_packages} && dnf clean all
-      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus systemd systemd-sysv util-linux {extra_packages} && rm -rf /var/lib/apt/lists/*
-      - Arch: pacman -Sy --noconfirm polkit dbus systemd util-linux {extra_packages}
-      - Alpine: apk add --no-cache polkit dbus openrc util-linux {extra_packages}
+   a. Install polkit, dbus, and util-linux using the distro's package manager:
+      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon util-linux {extra_packages} && dnf clean all
+      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus util-linux {extra_packages} && rm -rf /var/lib/apt/lists/*
+      - Arch: pacman -Sy --noconfirm polkit dbus util-linux {extra_packages}
+      - Alpine: apk add --no-cache polkit dbus util-linux {extra_packages}
       Pick the correct package manager for the base image.
-   b. Create a non-root test user: useradd -m testuser || adduser -D testuser
-      (polkit does not prompt for authentication when running as root, so the \
-      reproducer MUST run as a regular user)
+   b. mkdir -p /run/dbus
+   c. Create a non-root test user: useradd -m testuser || adduser -D testuser
 3. COPY {script_filename} /reproducer/{script_filename}
 4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["/sbin/init"]
+5. CMD ["sleep", "infinity"]
 
-The container will be started with --privileged so systemd can boot properly. \
-After boot, the reproducer will be executed via: \
-docker exec <container> runuser -u testuser -- /reproducer/{script_filename}
+The container entrypoint and reproducer execution are handled externally — \
+do NOT add dbus-daemon, polkitd, or runuser to the CMD.
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
 no JSON wrapping).
