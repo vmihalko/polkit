@@ -41,8 +41,6 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 _TRIAGE_MARKER = "Issue triaged by AI assistant"
 _TRIAGE_MARKER_BOT = "github-actions[bot]"
 
-def _repo_url(repo: str) -> str:
-    return f"https://github.com/{repo}.git"
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -100,6 +98,7 @@ class ValidationResult:
     stdout: str = ""
     stderr: str = ""
     success: bool = False
+    dockerfile: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -437,16 +436,15 @@ def validate(
 
     dockerfile_prompt = PROMPT_VALIDATE_DOCKERFILE.format(
         base_image=repro.base_image,
-        extra_packages=", ".join(repro.extra_packages) if repro.extra_packages else "none",
+        extra_packages=" ".join(repro.extra_packages) if repro.extra_packages else "",
         script_filename=repro.script_filename,
-        repo_url=_repo_url(github.repo)
     )
     dockerfile_content = gemini.generate(
         dockerfile_prompt, system_instruction=POLKIT_SUMMARY
     )
     dockerfile_content = _stripc_fences(dockerfile_content)
 
-    result = ValidationResult()
+    result = ValidationResult(dockerfile=dockerfile_content)
 
     with tempfile.TemporaryDirectory(prefix="polkit-validate-") as tmpdir:
         dockerfile_path = os.path.join(tmpdir, "Dockerfile")
@@ -591,6 +589,22 @@ def communicate(
         comment += (
             "<details><summary>Validation output</summary>\n\n"
             f"```\n{validation_result.stdout.strip()}\n```\n"
+            "</details>\n\n"
+        )
+    if validation_result.dockerfile.strip():
+        comment += (
+            "<details><summary>Run it locally with Docker/Podman</summary>\n\n"
+            f"Save the reproducer script as `{repro.script_filename}` and "
+            "the following as `Dockerfile` in the same directory, then run:\n\n"
+            "```bash\n"
+            f"docker build -t polkit-repro . && docker run --rm polkit-repro\n"
+            "```\n\n"
+            "Or with Podman:\n\n"
+            "```bash\n"
+            f"podman build -t polkit-repro . && podman run --rm polkit-repro\n"
+            "```\n\n"
+            f"**Dockerfile:**\n"
+            f"```dockerfile\n{validation_result.dockerfile.strip()}\n```\n"
             "</details>\n\n"
         )
     comment += (
