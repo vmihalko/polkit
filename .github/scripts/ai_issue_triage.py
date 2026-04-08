@@ -808,6 +808,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
             validation_result = validate(gemini, github, issue, design_result)
             if validation_result:
                 log.info("Validation: success=%s exit_code=%d", validation_result.success, validation_result.exit_code)
+                if validation_result.stdout.strip():
+                    log.info("Reproducer stdout:\n%s", validation_result.stdout.strip())
+                if validation_result.stderr.strip():
+                    log.info("Reproducer stderr:\n%s", validation_result.stderr.strip())
         except Exception:
             log.exception("Validation failed")
             ret_val = 2
