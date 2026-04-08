@@ -213,7 +213,10 @@ Steps:
       - Alpine: apk add --no-cache polkit dbus util-linux {extra_packages}
       Pick the correct package manager for the base image.
    b. mkdir -p /run/dbus
-   c. Create a non-root test user: useradd -m testuser || adduser -D testuser
+   c. Install common locale packages (needed for locale-related bugs):
+      - Fedora/RHEL: glibc-langpack-en (plus any others the reproducer needs)
+      - Debian/Ubuntu: locales (and run locale-gen for needed locales)
+   d. Create a non-root test user: useradd -m testuser || adduser -D testuser
 3. COPY {script_filename} /reproducer/{script_filename}
 4. RUN chmod +x /reproducer/{script_filename}
 5. CMD ["sleep", "infinity"]

@@ -553,10 +553,10 @@ def validate(
                 log.warning("Container init returned %d: %s",
                             init_proc.returncode, init_proc.stderr[:500])
 
-            # Run the reproducer as testuser
+            # Run the reproducer as testuser (-t for TTY, needed by pkttyagent)
             run_proc = subprocess.run(
                 [
-                    "docker", "exec", container_name,
+                    "docker", "exec", "-t", container_name,
                     "runuser", "-u", "testuser", "--",
                     f"/reproducer/{repro.script_filename}",
                 ],
