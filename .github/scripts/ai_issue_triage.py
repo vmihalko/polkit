@@ -710,7 +710,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     log.info("Pipeline complete for issue #%d", args.issue_number)
 
-    github.post_comment(args.issue_number, _TRIAGE_MARKER)
+    if ret_val == 0 and assessment is not None:
+        github.post_comment(args.issue_number, _TRIAGE_MARKER)
 
     return ret_val
 
