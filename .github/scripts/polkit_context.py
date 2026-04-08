@@ -203,9 +203,12 @@ Steps:
       - Alpine: apk add --no-cache polkit dbus {extra_packages}
       Pick the correct package manager for the base image.
    b. mkdir -p /run/dbus
+   c. Create a non-root test user: useradd -m testuser || adduser -D testuser
+      (polkit does not prompt for authentication when running as root, so the \
+      reproducer MUST run as a regular user)
 3. COPY {script_filename} /reproducer/{script_filename}
 4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["bash", "-c", "dbus-daemon --system --fork && /reproducer/{script_filename}"]
+5. CMD ["bash", "-c", "dbus-daemon --system --fork && su -l testuser -c /reproducer/{script_filename}"]
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
 no JSON wrapping).
