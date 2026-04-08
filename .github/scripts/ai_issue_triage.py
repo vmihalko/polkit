@@ -475,8 +475,8 @@ def validate(
 
     dockerfile_prompt = PROMPT_VALIDATE_DOCKERFILE.format(
         base_image=repro.base_image,
-        extra_packages=" ".join(repro.extra_packages) if repro.extra_packages else "",
         script_filename=repro.script_filename,
+        reproducer_script=repro.reproducer_script,
     )
     dockerfile_content = gemini.generate(
         dockerfile_prompt, system_instruction=POLKIT_SUMMARY
@@ -497,6 +497,7 @@ def validate(
         os.chmod(reproducer_path, 0o755)
 
         tag = f"polkit-validate-{issue['number']}"
+        container_name = f"polkit-test-{issue['number']}"
 
         try:
             build_proc = subprocess.run(
@@ -516,13 +517,50 @@ def validate(
                 result.exit_code = build_proc.returncode
                 return result
 
+            # Start container with systemd as PID 1
+            start_proc = subprocess.run(
+                [
+                    "docker", "run", "-d",
+                    "--privileged",
+                    "--cgroupns=host",
+                    "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
+                    f"--name={container_name}",
+                    f"--memory={DOCKER_MEMORY_LIMIT}",
+                    "--entrypoint", "/sbin/init",
+                    tag,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if start_proc.returncode != 0:
+                log.error("Docker start failed:\n%s", start_proc.stderr[-2000:])
+                result.stderr = start_proc.stderr[-2000:]
+                result.exit_code = start_proc.returncode
+                return result
+
+            # Wait for systemd to finish booting
+            log.info("Waiting for systemd to boot in container...")
+            for _ in range(15):
+                boot_check = subprocess.run(
+                    ["docker", "exec", container_name,
+                     "systemctl", "is-system-running"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                state = boot_check.stdout.strip()
+                log.info("systemd state: %s", state)
+                if state in ("running", "degraded"):
+                    break
+                time.sleep(2)
+            else:
+                log.warning("systemd did not reach running state")
+
+            # Run the reproducer as testuser (-t for TTY, needed by pkttyagent)
             run_proc = subprocess.run(
                 [
-                    "docker", "run",
-                    "--rm",
-                    "--network=none",
-                    f"--memory={DOCKER_MEMORY_LIMIT}",
-                    tag,
+                    "docker", "exec", "-t", container_name,
+                    "runuser", "-u", "testuser", "--",
+                    f"/reproducer/{repro.script_filename}",
                 ],
                 capture_output=True,
                 text=True,
@@ -540,6 +578,11 @@ def validate(
             log.error("Docker not found -- is it installed on this runner?")
             result.stderr = "Docker not found on runner"
         finally:
+            subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                timeout=30,
+            )
             subprocess.run(
                 ["docker", "rmi", "-f", tag],
                 capture_output=True,

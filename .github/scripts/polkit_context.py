@@ -152,13 +152,15 @@ busctl/gdbus/dbus-send). Only write C code if the bug cannot be triggered via \
 CLI tools. The reproducer must be fully self-contained and exit with code 0 \
 if the bug is reproduced, or non-zero if not.
 
-The script will run inside a minimal Docker container as a non-root user \
-(testuser). Keep these container constraints in mind:
+The script will run inside a Docker container booted with systemd as PID 1 \
+(dbus, polkitd, and logind are all running). It runs as a non-root user \
+(testuser) via: docker exec -t <container> runuser -u testuser -- /reproducer/script.sh
+
+Container constraints:
 - Do NOT use "set -u" — container environments have minimal variables set.
-- Do NOT use systemctl — there is no systemd in Docker.
-- Do NOT start dbus-daemon — it is already running when the script starts.
-- The script runs via: runuser -u testuser -- /reproducer/script.sh
-- polkit (pkexec, pkcheck, pkttyagent) and dbus-daemon are pre-installed.
+- Do NOT start dbus-daemon or polkitd — systemd starts them automatically.
+- You CAN use systemctl if needed (systemd is running).
+- polkit (pkexec, pkcheck, pkttyagent) and dbus are pre-installed.
 - Keep the script as SHORT as possible to avoid output token limits.
 
 Respond with ONLY a JSON object (no markdown fencing):
@@ -197,27 +199,34 @@ Respond with ONLY a JSON object (no markdown fencing):
 
 PROMPT_VALIDATE_DOCKERFILE = """\
 Generate a Dockerfile that installs polkit from the distro's package manager \
-and runs a reproducer script.
+and all dependencies needed to run the reproducer script below.
 
-IMPORTANT — do NOT build polkit from source. Use the distro's packaged version \
-so the environment matches what the reporter is using.
+IMPORTANT — do NOT build polkit from source. Use the distro's packaged version.
 
-Steps:
+REPRODUCER SCRIPT ({script_filename}):
+```
+{reproducer_script}
+```
+
+Requirements:
 1. FROM {base_image}
-2. Single RUN command that does ALL of the following:
-   a. Install polkit, dbus, and util-linux (provides runuser) using the distro's package manager:
-      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon util-linux {extra_packages} && dnf clean all
-      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus util-linux {extra_packages} && rm -rf /var/lib/apt/lists/*
-      - Arch: pacman -Sy --noconfirm polkit dbus util-linux {extra_packages}
-      - Alpine: apk add --no-cache polkit dbus util-linux {extra_packages}
-      Pick the correct package manager for the base image.
-   b. mkdir -p /run/dbus
-   c. Create a non-root test user: useradd -m testuser || adduser -D testuser
-      (polkit does not prompt for authentication when running as root, so the \
-      reproducer MUST run as a regular user)
-3. COPY {script_filename} /reproducer/{script_filename}
-4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["bash", "-c", "dbus-daemon --system --fork && runuser -u testuser -- /reproducer/{script_filename}"]
+2. Install ALL packages the reproducer needs. Always include these base packages:
+   - Fedora/RHEL: polkit dbus-daemon systemd util-linux (NOTE: the package is "dbus-daemon", NOT "dbus")
+   - Debian/Ubuntu: policykit-1 dbus systemd systemd-sysv util-linux
+   - Arch: polkit dbus systemd util-linux
+   - Alpine: polkit dbus openrc util-linux
+   Then add any other tools or locale packages the script needs. Inspect the \
+   script carefully — if it uses locales like fr_FR.UTF-8 or en_US.UTF-8, \
+   install the corresponding locale packages (e.g. glibc-langpack-fr, \
+   glibc-langpack-en on Fedora; locales + locale-gen on Debian/Ubuntu).
+3. mkdir -p /run/dbus
+4. Create a non-root test user: useradd -m testuser || adduser -D testuser
+5. COPY {script_filename} /reproducer/{script_filename}
+6. RUN chmod +x /reproducer/{script_filename}
+7. CMD ["sleep", "infinity"]
+
+The container entrypoint and reproducer execution are handled externally — \
+do NOT add dbus-daemon, polkitd, or runuser to the CMD.
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
 no JSON wrapping).
