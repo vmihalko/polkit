@@ -136,9 +136,9 @@ class GeminiClient:
                     json=body,
                     timeout=120,
                 )
-                if resp.status_code == 429:
+                if resp.status_code in (429, 503):
                     wait = 2 ** (attempt + 1)
-                    log.warning("Gemini rate-limited (429), retrying in %ds", wait)
+                    log.warning("Gemini %d, retrying in %ds", resp.status_code, wait)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
