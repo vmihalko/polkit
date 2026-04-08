@@ -152,6 +152,15 @@ busctl/gdbus/dbus-send). Only write C code if the bug cannot be triggered via \
 CLI tools. The reproducer must be fully self-contained and exit with code 0 \
 if the bug is reproduced, or non-zero if not.
 
+The script will run inside a minimal Docker container as a non-root user \
+(testuser). Keep these container constraints in mind:
+- Do NOT use "set -u" — container environments have minimal variables set.
+- Do NOT use systemctl — there is no systemd in Docker; dbus-daemon is started \
+  manually.
+- The script runs via: runuser -u testuser -- /reproducer/script.sh
+- polkit (pkexec, pkcheck, pkttyagent) and dbus-daemon are pre-installed.
+- Keep the script as SHORT as possible to avoid output token limits.
+
 Respond with ONLY a JSON object (no markdown fencing):
 - "reproducer_script": the full reproducer script as a string (use \\n for newlines)
 - "script_filename": filename, e.g. "reproducer.sh" or "reproducer.c"
