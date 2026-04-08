@@ -475,8 +475,8 @@ def validate(
 
     dockerfile_prompt = PROMPT_VALIDATE_DOCKERFILE.format(
         base_image=repro.base_image,
-        extra_packages=" ".join(repro.extra_packages) if repro.extra_packages else "",
         script_filename=repro.script_filename,
+        reproducer_script=repro.reproducer_script,
     )
     dockerfile_content = gemini.generate(
         dockerfile_prompt, system_instruction=POLKIT_SUMMARY

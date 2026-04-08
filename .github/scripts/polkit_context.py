@@ -198,28 +198,28 @@ Respond with ONLY a JSON object (no markdown fencing):
 """
 
 PROMPT_VALIDATE_DOCKERFILE = """\
-Generate a Dockerfile that installs polkit from the distro's package manager.
+Generate a Dockerfile that installs polkit from the distro's package manager \
+and all dependencies needed to run the reproducer script below.
 
-IMPORTANT — do NOT build polkit from source. Use the distro's packaged version \
-so the environment matches what the reporter is using.
+IMPORTANT — do NOT build polkit from source. Use the distro's packaged version.
 
-Steps:
+REPRODUCER SCRIPT ({script_filename}):
+```
+{reproducer_script}
+```
+
+Requirements:
 1. FROM {base_image}
-2. Single RUN command that does ALL of the following:
-   a. Install polkit, dbus, and util-linux using the distro's package manager:
-      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon util-linux {extra_packages} && dnf clean all
-      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus util-linux {extra_packages} && rm -rf /var/lib/apt/lists/*
-      - Arch: pacman -Sy --noconfirm polkit dbus util-linux {extra_packages}
-      - Alpine: apk add --no-cache polkit dbus util-linux {extra_packages}
-      Pick the correct package manager for the base image.
-   b. mkdir -p /run/dbus
-   c. Install common locale packages (needed for locale-related bugs):
-      - Fedora/RHEL: glibc-langpack-en (plus any others the reproducer needs)
-      - Debian/Ubuntu: locales (and run locale-gen for needed locales)
-   d. Create a non-root test user: useradd -m testuser || adduser -D testuser
-3. COPY {script_filename} /reproducer/{script_filename}
-4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["sleep", "infinity"]
+2. Install ALL packages the reproducer needs: polkit, dbus, util-linux, and \
+   any other tools or locale packages referenced in the script. Inspect the \
+   script carefully — if it uses locales like fr_FR.UTF-8 or en_US.UTF-8, \
+   install the corresponding locale packages (e.g. glibc-langpack-fr, \
+   glibc-langpack-en on Fedora; locales + locale-gen on Debian/Ubuntu).
+3. mkdir -p /run/dbus
+4. Create a non-root test user: useradd -m testuser || adduser -D testuser
+5. COPY {script_filename} /reproducer/{script_filename}
+6. RUN chmod +x /reproducer/{script_filename}
+7. CMD ["sleep", "infinity"]
 
 The container entrypoint and reproducer execution are handled externally — \
 do NOT add dbus-daemon, polkitd, or runuser to the CMD.
