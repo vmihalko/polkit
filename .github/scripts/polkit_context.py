@@ -196,16 +196,19 @@ so the environment matches what the reporter is using.
 Steps:
 1. FROM {base_image}
 2. Single RUN command that does ALL of the following:
-   a. Install polkit and dbus using the distro's package manager:
-      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon {extra_packages} && dnf clean all
-      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus {extra_packages} && rm -rf /var/lib/apt/lists/*
-      - Arch: pacman -Sy --noconfirm polkit dbus {extra_packages}
-      - Alpine: apk add --no-cache polkit dbus {extra_packages}
+   a. Install polkit, dbus, and util-linux (provides runuser) using the distro's package manager:
+      - Fedora/RHEL/CentOS: dnf install -y polkit dbus-daemon util-linux {extra_packages} && dnf clean all
+      - Debian/Ubuntu: apt-get update && apt-get install -y policykit-1 dbus util-linux {extra_packages} && rm -rf /var/lib/apt/lists/*
+      - Arch: pacman -Sy --noconfirm polkit dbus util-linux {extra_packages}
+      - Alpine: apk add --no-cache polkit dbus util-linux {extra_packages}
       Pick the correct package manager for the base image.
    b. mkdir -p /run/dbus
+   c. Create a non-root test user: useradd -m testuser || adduser -D testuser
+      (polkit does not prompt for authentication when running as root, so the \
+      reproducer MUST run as a regular user)
 3. COPY {script_filename} /reproducer/{script_filename}
 4. RUN chmod +x /reproducer/{script_filename}
-5. CMD ["bash", "-c", "dbus-daemon --system --fork && /reproducer/{script_filename}"]
+5. CMD ["bash", "-c", "dbus-daemon --system --fork && runuser -u testuser -- /reproducer/{script_filename}"]
 
 Respond with ONLY the Dockerfile contents as plain text (no markdown fencing, \
 no JSON wrapping).
