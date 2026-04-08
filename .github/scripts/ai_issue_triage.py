@@ -497,6 +497,7 @@ def validate(
         os.chmod(reproducer_path, 0o755)
 
         tag = f"polkit-validate-{issue['number']}"
+        container_name = f"polkit-test-{issue['number']}"
 
         try:
             build_proc = subprocess.run(
@@ -516,13 +517,44 @@ def validate(
                 result.exit_code = build_proc.returncode
                 return result
 
-            run_proc = subprocess.run(
+            # Start container with systemd as PID 1
+            start_proc = subprocess.run(
                 [
-                    "docker", "run",
-                    "--rm",
-                    "--network=none",
+                    "docker", "run", "-d",
+                    "--privileged",
+                    f"--name={container_name}",
                     f"--memory={DOCKER_MEMORY_LIMIT}",
                     tag,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if start_proc.returncode != 0:
+                log.error("Docker start failed:\n%s", start_proc.stderr[-2000:])
+                result.stderr = start_proc.stderr[-2000:]
+                result.exit_code = start_proc.returncode
+                return result
+
+            # Wait for systemd to boot (up to 30s)
+            log.info("Waiting for systemd to boot in container...")
+            subprocess.run(
+                [
+                    "docker", "exec", container_name,
+                    "systemctl", "is-system-running", "--wait",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            # is-system-running may return "degraded" which is fine for our purposes
+
+            # Run the reproducer as testuser
+            run_proc = subprocess.run(
+                [
+                    "docker", "exec", container_name,
+                    "runuser", "-u", "testuser", "--",
+                    f"/reproducer/{repro.script_filename}",
                 ],
                 capture_output=True,
                 text=True,
@@ -540,6 +572,11 @@ def validate(
             log.error("Docker not found -- is it installed on this runner?")
             result.stderr = "Docker not found on runner"
         finally:
+            subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                timeout=30,
+            )
             subprocess.run(
                 ["docker", "rmi", "-f", tag],
                 capture_output=True,
