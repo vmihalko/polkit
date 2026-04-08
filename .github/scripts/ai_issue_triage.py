@@ -541,17 +541,21 @@ def validate(
                 [
                     "docker", "exec", container_name,
                     "bash", "-c",
+                    "mkdir -p /run/dbus && "
                     "dbus-daemon --system --fork && "
-                    "(/usr/lib/polkit-1/polkitd &) && "
-                    "sleep 1",
+                    "POLKITD=$(command -v polkitd 2>/dev/null || "
+                    "  echo /usr/lib/polkit-1/polkitd) && "
+                    "$POLKITD --no-debug & "
+                    "sleep 2 && "
+                    "ls -la /run/dbus/",
                 ],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
-            if init_proc.returncode != 0:
-                log.warning("Container init returned %d: %s",
-                            init_proc.returncode, init_proc.stderr[:500])
+            log.info("Container init rc=%d stdout=%s stderr=%s",
+                     init_proc.returncode,
+                     init_proc.stdout[:500], init_proc.stderr[:500])
 
             # Run the reproducer as testuser (-t for TTY, needed by pkttyagent)
             run_proc = subprocess.run(
