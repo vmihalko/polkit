@@ -155,8 +155,8 @@ if the bug is reproduced, or non-zero if not.
 The script will run inside a minimal Docker container as a non-root user \
 (testuser). Keep these container constraints in mind:
 - Do NOT use "set -u" — container environments have minimal variables set.
-- Do NOT use systemctl — there is no systemd in Docker; dbus-daemon is started \
-  manually.
+- Do NOT use systemctl — there is no systemd in Docker.
+- Do NOT start dbus-daemon — it is already running when the script starts.
 - The script runs via: runuser -u testuser -- /reproducer/script.sh
 - polkit (pkexec, pkcheck, pkttyagent) and dbus-daemon are pre-installed.
 - Keep the script as SHORT as possible to avoid output token limits.
