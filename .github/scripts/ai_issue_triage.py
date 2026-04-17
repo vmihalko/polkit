@@ -845,6 +845,16 @@ def run_agent(
             capture_output=True, text=True, timeout=60,
         )
 
+        # Verify settings are in place
+        settings_check = subprocess.run(
+            ["docker", "exec", container_name, "bash", "-c",
+             "cat /root/.gemini/settings.json 2>&1; "
+             "echo '---'; "
+             "cat /workspace/.gemini/settings.json 2>&1"],
+            capture_output=True, text=True, timeout=10,
+        )
+        log.info("Settings check:\n%s", settings_check.stdout)
+
         # Quick sanity check — does gemini CLI start at all?
         ver_proc = subprocess.run(
             ["docker", "exec", container_name, "gemini", "--version"],
@@ -877,7 +887,7 @@ def run_agent(
         )
         log.info("Launching Gemini CLI agent for issue #%s", issue["number"])
         agent_cmd = (
-            f"gemini -y -p {repr(agent_prompt)} "
+            f"gemini -y --sandbox false -p {repr(agent_prompt)} "
             f">/workspace/output/agent_stdout.log "
             f"2>/workspace/output/agent_stderr.log"
         )
