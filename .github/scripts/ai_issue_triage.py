@@ -857,7 +857,16 @@ def run_agent(
             result.agent_output = f"Gemini CLI failed: {ver_proc.stderr.strip()}"
             return result
 
+        # Check available gemini flags
+        help_proc = subprocess.run(
+            ["docker", "exec", container_name, "gemini", "--help"],
+            capture_output=True, text=True, timeout=10,
+        )
+        log.info("Gemini CLI help:\n%s", help_proc.stdout)
+
         # Stage 7: Run Gemini CLI agent
+        # Redirect output to files inside container so we can always read
+        # them, even if the process times out or gets killed.
         repo = github.repo
         agent_prompt = (
             f"Reproduce the bug reported at "
@@ -867,36 +876,36 @@ def run_agent(
             f"for domain knowledge about polkit."
         )
         log.info("Launching Gemini CLI agent for issue #%s", issue["number"])
+        agent_cmd = (
+            f"gemini -y -p {repr(agent_prompt)} "
+            f">/workspace/output/agent_stdout.log "
+            f"2>/workspace/output/agent_stderr.log"
+        )
         try:
-            agent_proc = subprocess.run(
-                [
-                    "docker", "exec",
-                    "-w", "/workspace",
-                    container_name,
-                    "gemini", "-y", "--sandbox=false", "-p", agent_prompt,
-                ],
+            subprocess.run(
+                ["docker", "exec", "-w", "/workspace",
+                 container_name, "bash", "-c", agent_cmd],
                 capture_output=True, text=True,
                 timeout=AGENT_TIMEOUT_SECONDS,
             )
-            result.agent_output = agent_proc.stdout
-            log.info("Agent stdout:\n%s", agent_proc.stdout)
-            if agent_proc.stderr.strip():
-                log.info("Agent stderr:\n%s", agent_proc.stderr)
-        except subprocess.TimeoutExpired as exc:
-            # Capture whatever the agent produced before timing out
-            partial_out = (exc.stdout or b"") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            partial_err = (exc.stderr or b"") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            if isinstance(partial_out, bytes):
-                partial_out = partial_out.decode("utf-8", errors="replace")
-            if isinstance(partial_err, bytes):
-                partial_err = partial_err.decode("utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
             log.error("Agent timed out after %ds", AGENT_TIMEOUT_SECONDS)
-            if partial_out.strip():
-                log.info("Agent partial stdout:\n%s", partial_out)
-            if partial_err.strip():
-                log.info("Agent partial stderr:\n%s", partial_err)
-            result.agent_output = f"Agent timed out after {AGENT_TIMEOUT_SECONDS}s\n\n{partial_out}"
-            # Still try to collect results — agent may have written files before timeout
+            # Kill the gemini process inside the container
+            subprocess.run(
+                ["docker", "exec", container_name, "pkill", "-f", "gemini"],
+                capture_output=True, timeout=10,
+            )
+
+        # Read agent logs from inside container (always available)
+        for logname in ("agent_stdout.log", "agent_stderr.log"):
+            log_proc = subprocess.run(
+                ["docker", "exec", container_name,
+                 "cat", f"/workspace/output/{logname}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            log.info("Agent %s:\n%s", logname, log_proc.stdout)
+            if logname == "agent_stdout.log":
+                result.agent_output = log_proc.stdout
 
         # Stage 8: Collect results
         log.info("Collecting results from container")
