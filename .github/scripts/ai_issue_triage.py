@@ -43,7 +43,7 @@ AGENT_CONTAINER_IMAGE = {
 }
 SKILLS_REPO = "https://github.com/vmihalko/polkit-ai-skills.git"
 POLKIT_SOURCE_REPO = "https://github.com/vmihalko/polkit.git"
-AGENT_TIMEOUT_SECONDS = 600
+AGENT_TIMEOUT_SECONDS = 900
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
