@@ -116,6 +116,8 @@ class ValidationResult:
 class AgentResult:
     success: bool = False
     reproducer_script: str = ""
+    prepare_env_script: str = ""
+    reproducer_human: str = ""
     result_json: dict = field(default_factory=dict)
     agent_output: str = ""
     distro: str = "fedora"
@@ -934,6 +936,22 @@ def run_agent(
                 log.info("Found reproducer script (%d bytes)",
                          len(result.reproducer_script))
 
+            # Read prepare_env script
+            prepare_path = os.path.join(tmpdir, "prepare_env.sh")
+            if os.path.exists(prepare_path):
+                with open(prepare_path) as f:
+                    result.prepare_env_script = f.read()
+                log.info("Found prepare_env script (%d bytes)",
+                         len(result.prepare_env_script))
+
+            # Read human-readable reproducer
+            human_path = os.path.join(tmpdir, "reproducer_human.txt")
+            if os.path.exists(human_path):
+                with open(human_path) as f:
+                    result.reproducer_human = f.read()
+                log.info("Found human-readable reproducer (%d bytes)",
+                         len(result.reproducer_human))
+
             # Read result.json
             result_json_path = os.path.join(tmpdir, "result.json")
             if os.path.exists(result_json_path):
@@ -1118,19 +1136,38 @@ def communicate_agent(
     log.info("Posting agent-verified reproducer for issue #%s", issue["number"])
     explanation = agent_result.result_json.get("explanation", "")
     comment = (
-        "### Verified Reproducer (Agentic)\n\n"
-        "The following reproducer was automatically generated and "
-        "**successfully validated** by an AI agent iterating inside "
+        "### Verified Reproducer\n\n"
+        "An AI agent automatically reproduced this bug inside "
         f"a `{agent_result.distro}` container.\n\n"
     )
     if explanation:
         comment += f"**What it does:** {explanation}\n\n"
+
+    # Human-readable version first (the prominent part)
+    if agent_result.reproducer_human:
+        comment += (
+            f"**How to reproduce:**\n"
+            f"```\n{agent_result.reproducer_human}\n```\n\n"
+        )
+
+    # Collapsible sections for the agentic scripts
+    if agent_result.prepare_env_script:
+        comment += (
+            "<details><summary>Environment setup "
+            "(<code>prepare_env.sh</code>)</summary>\n\n"
+            f"```bash\n{agent_result.prepare_env_script}\n```\n"
+            "</details>\n\n"
+        )
+
     comment += (
-        f"**Reproducer** (`reproducer.sh`):\n"
-        f"```bash\n{agent_result.reproducer_script}\n```\n\n"
-        f"**Environment:** `{AGENT_CONTAINER_IMAGE[agent_result.distro]}`\n\n"
+        "<details><summary>Full agentic reproducer "
+        "(<code>reproducer.sh</code>)</summary>\n\n"
+        f"```bash\n{agent_result.reproducer_script}\n```\n"
+        "</details>\n\n"
     )
+
     comment += (
+        f"**Environment:** `{AGENT_CONTAINER_IMAGE[agent_result.distro]}`\n\n"
         "---\n"
         "*This reproducer was generated and verified by an AI agent. "
         "Please confirm it matches the problem you reported.*"
