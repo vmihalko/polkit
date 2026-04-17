@@ -218,6 +218,8 @@ class GitHubClient:
 
     def post_comment(self, number: int, body: str) -> None:
         body = body[:MAX_COMMENT_LENGTH]
+        # Strip @ mentions to avoid notifying users (especially on fork mirrors)
+        body = re.sub(r'@([a-zA-Z0-9_-]+)', r'`\1`', body)
         resp = self._session.post(
             f"{self._base}/issues/{number}/comments",
             json={"body": body},
