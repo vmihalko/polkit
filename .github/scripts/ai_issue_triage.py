@@ -844,6 +844,18 @@ def run_agent(
             capture_output=True, text=True, timeout=60,
         )
 
+        # Quick sanity check — does gemini CLI start at all?
+        ver_proc = subprocess.run(
+            ["docker", "exec", container_name, "gemini", "--version"],
+            capture_output=True, text=True, timeout=30,
+        )
+        log.info("Gemini CLI version: %s (exit %d)",
+                 ver_proc.stdout.strip(), ver_proc.returncode)
+        if ver_proc.returncode != 0:
+            log.error("Gemini CLI not working: %s", ver_proc.stderr.strip())
+            result.agent_output = f"Gemini CLI failed: {ver_proc.stderr.strip()}"
+            return result
+
         # Stage 7: Run Gemini CLI agent
         repo = github.repo
         agent_prompt = (
@@ -854,19 +866,36 @@ def run_agent(
             f"for domain knowledge about polkit."
         )
         log.info("Launching Gemini CLI agent for issue #%s", issue["number"])
-        agent_proc = subprocess.run(
-            [
-                "docker", "exec",
-                "-w", "/workspace",
-                container_name,
-                "gemini", "-y", "-p", agent_prompt,
-            ],
-            capture_output=True, text=True,
-            timeout=AGENT_TIMEOUT_SECONDS,
-        )
-        result.agent_output = agent_proc.stdout[-8000:]
-        if agent_proc.stderr.strip():
-            log.info("Agent stderr:\n%s", agent_proc.stderr[-4000:])
+        try:
+            agent_proc = subprocess.run(
+                [
+                    "docker", "exec",
+                    "-w", "/workspace",
+                    container_name,
+                    "gemini", "-y", "-p", agent_prompt,
+                ],
+                capture_output=True, text=True,
+                timeout=AGENT_TIMEOUT_SECONDS,
+            )
+            result.agent_output = agent_proc.stdout
+            log.info("Agent stdout:\n%s", agent_proc.stdout)
+            if agent_proc.stderr.strip():
+                log.info("Agent stderr:\n%s", agent_proc.stderr)
+        except subprocess.TimeoutExpired as exc:
+            # Capture whatever the agent produced before timing out
+            partial_out = (exc.stdout or b"") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            partial_err = (exc.stderr or b"") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            if isinstance(partial_out, bytes):
+                partial_out = partial_out.decode("utf-8", errors="replace")
+            if isinstance(partial_err, bytes):
+                partial_err = partial_err.decode("utf-8", errors="replace")
+            log.error("Agent timed out after %ds", AGENT_TIMEOUT_SECONDS)
+            if partial_out.strip():
+                log.info("Agent partial stdout:\n%s", partial_out)
+            if partial_err.strip():
+                log.info("Agent partial stderr:\n%s", partial_err)
+            result.agent_output = f"Agent timed out after {AGENT_TIMEOUT_SECONDS}s\n\n{partial_out}"
+            # Still try to collect results — agent may have written files before timeout
 
         # Stage 8: Collect results
         log.info("Collecting results from container")
@@ -925,15 +954,15 @@ def run_agent(
 # ---------------------------------------------------------------------------
 
 def _issue_already_has_reproducer(github: GitHubClient, issue: dict) -> bool:
-    """Heuristic: check if the issue body contains code blocks that look like a reproducer."""
-    body = (issue.get("body") or "").lower()
+    """Check if a bot already posted a reproducer on this issue."""
     comments = github.get_issue_comments(issue["number"])
-    sources = body + " ".join((comment.get("body") or "").lower() for comment in comments)
-    code_indicators = ["```", "#!/bin/", "reproducer", "steps to reproduce"]
-    script_indicators = ["pkexec", "pkcheck", "busctl", "gdbus", "dbus-send"]
-    has_code = any(ind in sources for ind in code_indicators)
-    has_polkit_tool = any(ind in sources for ind in script_indicators)
-    return has_code and has_polkit_tool
+    for comment in comments:
+        if comment["user"]["login"] != _TRIAGE_MARKER_BOT:
+            continue
+        body = (comment.get("body") or "").lower()
+        if "verified reproducer" in body or "automated reproducer" in body:
+            return True
+    return False
 
 
 def communicate(
