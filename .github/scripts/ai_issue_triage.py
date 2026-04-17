@@ -830,11 +830,12 @@ def run_agent(
              "/workspace/polkit-ai-skills"],
             capture_output=True, text=True, timeout=60,
         )
-        # GEMINI.md and .gemini/ at workspace root so gemini CLI finds them
+        # GEMINI.md at workspace root; .gemini/ to both workspace and home
         subprocess.run(
             ["docker", "exec", container_name, "bash", "-c",
              "cp /workspace/polkit-ai-skills/GEMINI.md /workspace/GEMINI.md && "
-             "cp -r /workspace/polkit-ai-skills/.gemini /workspace/.gemini"],
+             "cp -r /workspace/polkit-ai-skills/.gemini /workspace/.gemini && "
+             "cp -r /workspace/polkit-ai-skills/.gemini /root/.gemini"],
             capture_output=True, text=True, timeout=10,
         )
         subprocess.run(
@@ -872,7 +873,7 @@ def run_agent(
                     "docker", "exec",
                     "-w", "/workspace",
                     container_name,
-                    "gemini", "-y", "-p", agent_prompt,
+                    "gemini", "-y", "--sandbox=false", "-p", agent_prompt,
                 ],
                 capture_output=True, text=True,
                 timeout=AGENT_TIMEOUT_SECONDS,
