@@ -21,6 +21,7 @@ from polkit_context import (
     PROMPT_DESIGN_SOLUTION,
     PROMPT_ELICIT,
     PROMPT_LABEL,
+    PROMPT_SELECT_ENVIRONMENT,
     PROMPT_VALIDATE_DOCKERFILE,
 )
 
@@ -35,8 +36,18 @@ DOCKER_TIMEOUT_SECONDS = 300
 DOCKER_MEMORY_LIMIT = "512m"
 MAX_COMMENT_LENGTH = 65536
 
+# Agentic reproducer constants
+AGENT_CONTAINER_IMAGE = {
+    "fedora": "ghcr.io/vmihalko/polkit-ai-skills:fedora",
+    "ubuntu": "ghcr.io/vmihalko/polkit-ai-skills:ubuntu",
+}
+SKILLS_REPO = "https://github.com/vmihalko/polkit-ai-skills.git"
+POLKIT_SOURCE_REPO = "https://github.com/vmihalko/polkit.git"
+AGENT_TIMEOUT_SECONDS = 600
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+SKILLS_REPO_TOKEN = os.environ.get("SKILLS_REPO_TOKEN")
 
 _TRIAGE_MARKER = "Issue triaged by AI assistant"
 _TRIAGE_MARKER_BOT = "github-actions[bot]"
@@ -99,6 +110,15 @@ class ValidationResult:
     stderr: str = ""
     success: bool = False
     dockerfile: str = ""
+
+
+@dataclass
+class AgentResult:
+    success: bool = False
+    reproducer_script: str = ""
+    result_json: dict = field(default_factory=dict)
+    agent_output: str = ""
+    distro: str = "fedora"
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +613,314 @@ def validate(
 
 
 # ---------------------------------------------------------------------------
+# Feature 5b: Agentic reproducer (replaces Design+Validate for bugs)
+# ---------------------------------------------------------------------------
+
+def select_environment(
+    gemini: GeminiClient,
+    issue: dict,
+    assessment: AssessmentResult,
+) -> tuple[str, list[str]]:
+    """Use Gemini REST to pick the right container distro and extra packages."""
+    log.info("Selecting environment for issue #%s", issue["number"])
+    prompt = PROMPT_SELECT_ENVIRONMENT.format(
+        assessment_json=json.dumps({
+            "type": assessment.type,
+            "summary": assessment.summary,
+            "affected_components": assessment.affected_components,
+        }, indent=2),
+        issue_title=issue["title"],
+        issue_body=issue.get("body", "") or "",
+    )
+    raw = gemini.generate(prompt, system_instruction=POLKIT_SUMMARY)
+    data = _safe_parse_json(raw, "select_environment")
+    if data is None:
+        return "fedora", []
+
+    distro = data.get("distro", "fedora")
+    if distro not in AGENT_CONTAINER_IMAGE:
+        log.warning("Unknown distro '%s', falling back to fedora", distro)
+        distro = "fedora"
+
+    extra = data.get("extra_packages", [])
+    log.info("Selected environment: %s, extra packages: %s", distro, extra)
+    return distro, extra
+
+
+def _wait_for_systemd(container_name: str, retries: int = 15) -> None:
+    """Poll systemctl is-system-running until ready."""
+    for i in range(retries):
+        try:
+            check = subprocess.run(
+                ["docker", "exec", container_name,
+                 "systemctl", "is-system-running"],
+                capture_output=True, text=True, timeout=10,
+            )
+            state = check.stdout.strip()
+            log.info("systemd state: %s (attempt %d/%d)", state, i + 1, retries)
+            if state in ("running", "degraded"):
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(2)
+    log.warning("systemd did not reach running state after %d attempts", retries)
+
+
+def _create_skill_pr(skills_dir: str, issue_number: int) -> str | None:
+    """Open a PR to polkit-ai-skills with new skill files the agent discovered."""
+    if not SKILLS_REPO_TOKEN:
+        log.info("No SKILLS_REPO_TOKEN, skipping skill PR")
+        return None
+
+    # Collect skill files
+    new_files = []
+    for root, _dirs, files in os.walk(skills_dir):
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, skills_dir)
+            new_files.append((rel, full))
+
+    if not new_files:
+        return None
+
+    log.info("Agent produced %d new skill file(s): %s",
+             len(new_files), [f[0] for f in new_files])
+
+    with tempfile.TemporaryDirectory(prefix="polkit-skills-pr-") as tmpdir:
+        # Clone skills repo with the PAT
+        clone_url = f"https://x-access-token:{SKILLS_REPO_TOKEN}@github.com/vmihalko/polkit-ai-skills.git"
+        clone_proc = subprocess.run(
+            ["git", "clone", "--depth=1", clone_url, tmpdir],
+            capture_output=True, text=True, timeout=60,
+        )
+        if clone_proc.returncode != 0:
+            log.error("Failed to clone skills repo: %s", clone_proc.stderr[-500:])
+            return None
+
+        # Copy new skill files into the clone
+        branch = f"agent/issue-{issue_number}-skills"
+        subprocess.run(
+            ["git", "-C", tmpdir, "checkout", "-b", branch],
+            capture_output=True, text=True,
+        )
+        for rel_path, src_path in new_files:
+            dest = os.path.join(tmpdir, "skills", rel_path)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(src_path, "r") as sf, open(dest, "w") as df:
+                df.write(sf.read())
+
+        # Commit and push
+        subprocess.run(
+            ["git", "-C", tmpdir, "add", "skills/"],
+            capture_output=True, text=True,
+        )
+        commit_msg = f"Add skill files discovered while reproducing issue #{issue_number}"
+        subprocess.run(
+            ["git", "-C", tmpdir,
+             "-c", "user.name=polkit-ai-bot",
+             "-c", "user.email=noreply@github.com",
+             "commit", "-m", commit_msg],
+            capture_output=True, text=True,
+        )
+        push_proc = subprocess.run(
+            ["git", "-C", tmpdir, "push", "origin", branch],
+            capture_output=True, text=True, timeout=30,
+        )
+        if push_proc.returncode != 0:
+            log.error("Failed to push skill branch: %s", push_proc.stderr[-500:])
+            return None
+
+        # Open PR via GitHub API
+        pr_body = (
+            f"New skill files discovered by the AI agent while "
+            f"reproducing polkit issue #{issue_number}.\n\n"
+            f"Files:\n" +
+            "\n".join(f"- `skills/{rel}`" for rel, _ in new_files)
+        )
+        pr_resp = requests.post(
+            "https://api.github.com/repos/vmihalko/polkit-ai-skills/pulls",
+            headers={
+                "Authorization": f"Bearer {SKILLS_REPO_TOKEN}",
+                "Accept": "application/vnd.github+json",
+            },
+            json={
+                "title": f"Skills from issue #{issue_number}",
+                "head": branch,
+                "base": "main",
+                "body": pr_body,
+            },
+            timeout=30,
+        )
+        if pr_resp.status_code in (200, 201):
+            pr_url = pr_resp.json().get("html_url", "")
+            log.info("Opened skill PR: %s", pr_url)
+            return pr_url
+        else:
+            log.error("Failed to create skill PR: %d %s",
+                      pr_resp.status_code, pr_resp.text[:500])
+            return None
+
+
+def run_agent(
+    gemini: GeminiClient,
+    github: GitHubClient,
+    issue: dict,
+    assessment: AssessmentResult,
+) -> AgentResult:
+    """Run Gemini CLI inside a Docker container to iteratively build a reproducer."""
+    # Stage 4: Select environment
+    distro, extra_packages = select_environment(gemini, issue, assessment)
+
+    image = AGENT_CONTAINER_IMAGE[distro]
+    container_name = f"polkit-agent-{issue['number']}"
+    result = AgentResult(distro=distro)
+
+    try:
+        # Pull pre-built image
+        log.info("Pulling container image %s", image)
+        subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        # Stage 5: Start container with systemd as PID 1
+        # API keys passed at `docker run` time so they are never on a
+        # `docker exec` command line (avoids leaking to process listings).
+        log.info("Starting container %s", container_name)
+        start_proc = subprocess.run(
+            [
+                "docker", "run", "-d",
+                "--privileged",
+                "--cgroupns=host",
+                "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw",
+                f"--name={container_name}",
+                "--memory=1g",
+                "-e", "GEMINI_API_KEY",
+                "-e", "GITHUB_TOKEN",
+                image,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        if start_proc.returncode != 0:
+            log.error("Container start failed:\n%s", start_proc.stderr[-2000:])
+            result.agent_output = start_proc.stderr[-2000:]
+            return result
+
+        # Wait for systemd
+        _wait_for_systemd(container_name)
+
+        # Install extra packages
+        if extra_packages:
+            pkgs = " ".join(extra_packages)
+            if distro == "fedora":
+                pkg_cmd = f"dnf install -y {pkgs}"
+            else:
+                pkg_cmd = f"apt-get update && apt-get install -y {pkgs}"
+            log.info("Installing extra packages: %s", pkgs)
+            subprocess.run(
+                ["docker", "exec", container_name, "bash", "-c", pkg_cmd],
+                capture_output=True, text=True, timeout=120,
+            )
+
+        # Stage 6: Prepare workspace — clone skills repo and polkit source
+        log.info("Preparing workspace (skills, source)")
+        subprocess.run(
+            ["docker", "exec", container_name,
+             "git", "clone", "--depth=1", SKILLS_REPO,
+             "/workspace/polkit-ai-skills"],
+            capture_output=True, text=True, timeout=60,
+        )
+        # GEMINI.md and .gemini/ at workspace root so gemini CLI finds them
+        subprocess.run(
+            ["docker", "exec", container_name, "bash", "-c",
+             "cp /workspace/polkit-ai-skills/GEMINI.md /workspace/GEMINI.md && "
+             "cp -r /workspace/polkit-ai-skills/.gemini /workspace/.gemini"],
+            capture_output=True, text=True, timeout=10,
+        )
+        subprocess.run(
+            ["docker", "exec", container_name,
+             "git", "clone", "--depth=1", POLKIT_SOURCE_REPO,
+             "/workspace/polkit-src"],
+            capture_output=True, text=True, timeout=60,
+        )
+
+        # Stage 7: Run Gemini CLI agent
+        repo = github.repo
+        agent_prompt = (
+            f"Reproduce the bug reported at "
+            f"https://github.com/{repo}/issues/{issue['number']}. "
+            f"Follow the instructions in /workspace/GEMINI.md. "
+            f"Read the skill files in /workspace/polkit-ai-skills/skills/ "
+            f"for domain knowledge about polkit."
+        )
+        log.info("Launching Gemini CLI agent for issue #%s", issue["number"])
+        agent_proc = subprocess.run(
+            [
+                "docker", "exec",
+                "-w", "/workspace",
+                container_name,
+                "gemini", "-y", "-p", agent_prompt,
+            ],
+            capture_output=True, text=True,
+            timeout=AGENT_TIMEOUT_SECONDS,
+        )
+        result.agent_output = agent_proc.stdout[-8000:]
+        if agent_proc.stderr.strip():
+            log.info("Agent stderr:\n%s", agent_proc.stderr[-4000:])
+
+        # Stage 8: Collect results
+        log.info("Collecting results from container")
+        with tempfile.TemporaryDirectory(prefix="polkit-agent-") as tmpdir:
+            subprocess.run(
+                ["docker", "cp",
+                 f"{container_name}:/workspace/output/.", tmpdir],
+                capture_output=True, text=True, timeout=30,
+            )
+
+            # Read reproducer script
+            reproducer_path = os.path.join(tmpdir, "reproducer.sh")
+            if os.path.exists(reproducer_path):
+                with open(reproducer_path) as f:
+                    result.reproducer_script = f.read()
+                log.info("Found reproducer script (%d bytes)",
+                         len(result.reproducer_script))
+
+            # Read result.json
+            result_json_path = os.path.join(tmpdir, "result.json")
+            if os.path.exists(result_json_path):
+                with open(result_json_path) as f:
+                    result.result_json = json.load(f)
+                result.success = result.result_json.get("success", False)
+                log.info("Agent result: success=%s", result.success)
+            else:
+                log.warning("No result.json found in agent output")
+
+            # Open PR for any new skill files the agent wrote
+            skills_output = os.path.join(tmpdir, "skills")
+            if os.path.isdir(skills_output):
+                try:
+                    _create_skill_pr(skills_output, issue["number"])
+                except Exception:
+                    log.exception("Skill PR creation failed")
+
+    except subprocess.TimeoutExpired:
+        log.error("Agent timed out after %ds", AGENT_TIMEOUT_SECONDS)
+        result.agent_output = f"Agent timed out after {AGENT_TIMEOUT_SECONDS}s"
+    except FileNotFoundError:
+        log.error("Docker not found — is it installed on this runner?")
+        result.agent_output = "Docker not found on runner"
+    except Exception:
+        log.exception("Agent failed unexpectedly")
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True, timeout=30,
+        )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Feature 6: Communicate
 # ---------------------------------------------------------------------------
 
@@ -699,6 +1027,70 @@ def communicate(
     return comment
 
 
+def communicate_agent(
+    github: GitHubClient,
+    issue: dict,
+    agent_result: AgentResult,
+) -> str | None:
+    """Post the agentic reproducer result to the issue."""
+    if _issue_already_has_reproducer(github, issue):
+        log.info("Issue #%s already contains a reproducer, skipping", issue["number"])
+        return None
+
+    if not agent_result.success or not agent_result.reproducer_script:
+        log.info("Agent did not produce a working reproducer for issue #%s",
+                 issue["number"])
+        parts = ["### Automated Reproducer (Agentic)\n"]
+        parts.append(
+            "An AI agent attempted to reproduce this bug but "
+            "**could not produce a verified reproducer**.\n"
+        )
+        explanation = agent_result.result_json.get("explanation", "")
+        if explanation:
+            parts.append(f"**Agent notes:** {explanation}\n")
+        if agent_result.agent_output.strip():
+            # Truncate to keep comment reasonable
+            output = agent_result.agent_output.strip()[-4000:]
+            parts.append(
+                "<details><summary>Agent output (last 4000 chars)</summary>\n\n"
+                f"```\n{output}\n```\n"
+                "</details>\n"
+            )
+        parts.append(
+            "\n---\n"
+            "*The AI agent was unable to produce a working reproducer. "
+            "A maintainer may attempt to reproduce this manually.*"
+        )
+        comment = "\n".join(parts)
+        github.post_comment(issue["number"], comment)
+        return comment
+
+    # Success — post the verified reproducer
+    log.info("Posting agent-verified reproducer for issue #%s", issue["number"])
+    explanation = agent_result.result_json.get("explanation", "")
+    comment = (
+        "### Verified Reproducer (Agentic)\n\n"
+        "The following reproducer was automatically generated and "
+        "**successfully validated** by an AI agent iterating inside "
+        f"a `{agent_result.distro}` container.\n\n"
+    )
+    if explanation:
+        comment += f"**What it does:** {explanation}\n\n"
+    comment += (
+        f"**Reproducer** (`reproducer.sh`):\n"
+        f"```bash\n{agent_result.reproducer_script}\n```\n\n"
+        f"**Environment:** `{AGENT_CONTAINER_IMAGE[agent_result.distro]}`\n\n"
+    )
+    comment += (
+        "---\n"
+        "*This reproducer was generated and verified by an AI agent. "
+        "Please confirm it matches the problem you reported.*"
+    )
+
+    github.post_comment(issue["number"], comment)
+    return comment
+
+
 # ---------------------------------------------------------------------------
 # CLI and pipeline
 # ---------------------------------------------------------------------------
@@ -789,8 +1181,28 @@ def run_pipeline(args: argparse.Namespace) -> None:
     else:
         log.info("Skipping elicitation: no assessment result")
 
-    # Stage 4: Design
-    if args.design and assessment:
+    # Stage 4+5+6: Bug path → agentic reproducer; feature path → design+validate
+    agent_result: AgentResult | None = None
+
+    if assessment and assessment.type == "bug" and args.design:
+        # Agentic reproducer pipeline for bugs
+        log.info("Bug detected — running agentic reproducer pipeline")
+        try:
+            agent_result = run_agent(gemini, github, issue, assessment)
+            log.info("Agent complete: success=%s", agent_result.success)
+        except Exception:
+            log.exception("Agent failed")
+            ret_val = 2
+
+        if args.communicate and agent_result:
+            try:
+                communicate_agent(github, issue, agent_result)
+            except Exception:
+                log.exception("Agent communication failed")
+                ret_val = 2
+
+    elif assessment and assessment.type == "feature_request" and args.design:
+        # Single-shot design for feature requests (unchanged)
         try:
             design_result = design(gemini, issue, assessment)
             if design_result:
@@ -798,35 +1210,27 @@ def run_pipeline(args: argparse.Namespace) -> None:
         except Exception:
             log.exception("Design failed")
             ret_val = 2
-    else:
-        log.info("Skipping design: no assessment result")
 
-    # Stage 5: Validate (before communicate — only post verified reproducers)
-    validation_result: ValidationResult | None = None
-    if args.validate and design_result:
-        try:
-            validation_result = validate(gemini, github, issue, design_result)
-            if validation_result:
-                log.info("Validation: success=%s exit_code=%d", validation_result.success, validation_result.exit_code)
-                if validation_result.stdout.strip():
-                    log.info("Reproducer stdout:\n%s", validation_result.stdout.strip())
-                if validation_result.stderr.strip():
-                    log.info("Reproducer stderr:\n%s", validation_result.stderr.strip())
-        except Exception:
-            log.exception("Validation failed")
-            ret_val = 2
-    else:
-        log.info("Skipping validation: no design result")
+        validation_result: ValidationResult | None = None
+        if args.validate and design_result:
+            try:
+                validation_result = validate(gemini, github, issue, design_result)
+                if validation_result:
+                    log.info("Validation: success=%s exit_code=%d",
+                             validation_result.success, validation_result.exit_code)
+            except Exception:
+                log.exception("Validation failed")
+                ret_val = 2
 
-    # Stage 6: Communicate (posts based on validation outcome)
-    if args.communicate and design_result:
-        try:
-            communicate(github, issue, design_result, validation_result)
-        except Exception:
-            log.exception("Communication failed")
-            ret_val = 2
+        if args.communicate and design_result:
+            try:
+                communicate(github, issue, design_result, validation_result)
+            except Exception:
+                log.exception("Communication failed")
+                ret_val = 2
     else:
-        log.info("Skipping communication: no design result")   
+        log.info("Skipping design/agent: type=%s or no assessment",
+                 assessment.type if assessment else "none")
 
     log.info("Pipeline complete for issue #%d", args.issue_number)
 

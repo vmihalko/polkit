@@ -197,6 +197,53 @@ Respond with ONLY a JSON object (no markdown fencing):
 - "sketch": a rough diff or pseudocode of the core change
 """
 
+COMPONENT_TO_SKILL_DIR = {
+    "polkitd": ["polkitd", "general"],
+    "pkexec": ["pkexec", "general"],
+    "pkcheck": ["pkexec", "general"],
+    "pkttyagent": ["pkexec", "general"],
+    "polkit-agent-helper": ["pam", "general"],
+    "pam": ["pam", "general"],
+    "libpolkit-gobject": ["polkitd", "general"],
+    "libpolkit-agent": ["pam", "general"],
+    "duktape": ["polkitd", "general"],
+    "rules": ["polkitd", "general"],
+    "session-monitor": ["polkitd", "general"],
+    "build-system": ["general"],
+    "ci-cd": ["general"],
+    "documentation": ["general"],
+}
+
+
+PROMPT_SELECT_ENVIRONMENT = """\
+ASSESSMENT:
+{assessment_json}
+
+ISSUE TITLE: {issue_title}
+
+ISSUE BODY:
+{issue_body}
+
+AVAILABLE ENVIRONMENTS:
+- fedora — Fedora latest with polkit, systemd, dbus, build deps
+- ubuntu — Ubuntu 24.04 with policykit-1, systemd, dbus, build deps
+
+Both environments have: gcc, meson, ninja, expect, strace, git, curl, jq, \
+nodejs, gh CLI, gemini CLI. Both have a non-root testuser with password \
+"testpass".
+
+Based on the issue description and reporter's distro (if mentioned), select \
+the best environment and list any additional packages needed that are NOT \
+already installed.
+
+Respond with ONLY a JSON object (no markdown fencing):
+- "distro": "fedora" or "ubuntu"
+- "extra_packages": list of additional packages to install (e.g. \
+  ["glibc-langpack-fr", "python3"]). Empty list if none needed.
+- "reasoning": one sentence explaining the choice
+"""
+
+
 PROMPT_VALIDATE_DOCKERFILE = """\
 Generate a Dockerfile that installs polkit from the distro's package manager \
 and all dependencies needed to run the reproducer script below.
