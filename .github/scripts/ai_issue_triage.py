@@ -801,6 +801,7 @@ def run_agent(
                 "--memory=1g",
                 "-e", "GEMINI_API_KEY",
                 "-e", "GITHUB_TOKEN",
+                "-e", "GEMINI_CLI_TRUST_WORKSPACE=true",
                 image,
             ],
             capture_output=True, text=True, timeout=60,
@@ -891,7 +892,7 @@ def run_agent(
         )
         log.info("Launching Gemini CLI agent for issue #%s", issue["number"])
         agent_cmd = (
-            f"gemini -y --sandbox false -p {repr(agent_prompt)} "
+            f"gemini -y --skip-trust --sandbox false -p {repr(agent_prompt)} "
             f">/workspace/output/agent_stdout.log "
             f"2>/workspace/output/agent_stderr.log"
         )
