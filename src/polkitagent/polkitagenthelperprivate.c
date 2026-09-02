@@ -61,7 +61,9 @@ read_cookie (int argc, char **argv)
   else
     {
       #define POLKIT_AGENT_MAX_COOKIE 4096
-      char buf[POLKIT_AGENT_MAX_COOKIE + 2]; /* +1 for newline, +1 for NUL */
+      /* Initialize the buffer to avoid a false positive from Alpine's
+       * fortified fgets() wrapper when building with GCC and -Werror. */
+      char buf[POLKIT_AGENT_MAX_COOKIE + 2] = { 0 }; /* +1 for newline, +1 for NUL */
       if (fgets (buf, sizeof(buf), stdin) == NULL)
         {
           if (!feof (stdin))
