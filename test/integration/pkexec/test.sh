@@ -196,6 +196,47 @@ sudo -u "$TEST_USER" pkexec --disable-internal-agent "$TMP_DIR/test-symlink" -c 
 grep -q "^symlink as root$" "$TMP_DIR/canon-sym.log"
 rm -f "$TMP_DIR/canon-sym" "$TMP_DIR/test-binary"
 
+: "Check that callers cannot bypass authorization via path aliases"
+# If two policies exist for aliases of the same binary (canonical vs symlink)
+# with different defaults, the caller must not be able to select the more
+# permissive action by choosing which path to invoke.
+# See: https://github.com/polkit-org/polkit/pull/698
+cp -v "$(command -v bash)" "$TMP_DIR/test-binary-alias"
+ln -sv "$TMP_DIR/test-binary-alias" "$TMP_DIR/test-symlink-alias"
+cat >"$TEST_ACTIONS" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+"http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<policyconfig>
+  <vendor>polkit</vendor>
+
+  <action id="org.freedesktop.PolicyKit1.test.restrictive">
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">$TMP_DIR/test-binary-alias</annotate>
+  </action>
+
+  <action id="org.freedesktop.PolicyKit1.test.permissive">
+    <defaults>
+      <allow_any>yes</allow_any>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">$TMP_DIR/test-symlink-alias</annotate>
+  </action>
+</policyconfig>
+EOF
+systemctl restart polkit
+# Via the canonical path: restrictive action should match, auth required
+(! sudo -u "$TEST_USER" pkexec --disable-internal-agent "$TMP_DIR/test-binary-alias" -c 'echo bypassed via canonical' | tee "$TMP_DIR/alias-canonical.log")
+(! grep -q "bypassed via canonical" "$TMP_DIR/alias-canonical.log")
+grep -q "Not authorized" "$TMP_DIR/alias-canonical.log"
+# Via the symlink: should ALSO require auth — the canonical (restrictive) action
+# must win regardless of invocation path
+(! sudo -u "$TEST_USER" pkexec --disable-internal-agent "$TMP_DIR/test-symlink-alias" -c 'echo bypassed via symlink' | tee "$TMP_DIR/alias-symlink.log")
+(! grep -q "bypassed via symlink" "$TMP_DIR/alias-symlink.log")
+grep -q "Not authorized" "$TMP_DIR/alias-symlink.log"
+rm -f "$TMP_DIR/test-binary-alias" "$TMP_DIR/test-symlink-alias" "$TMP_DIR/alias-canonical.log" "$TMP_DIR/alias-symlink.log"
+
 # Coverage for https://github.com/polkit-org/polkit/pull/533
 : "Authentication caching with auth_keep"
 cat >"$TEST_ACTIONS" <<EOF
